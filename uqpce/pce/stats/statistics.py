@@ -546,6 +546,18 @@ def calc_hat_matrix(var_basis):
     Inputs: var_basis- the evaluated variable basis
 
     Calculates the hat matrix for a variable basis.
+
+    IY: Recall,
+        matrix coeffcient s_i = (X'X)^(-1)X' Y, where X is the variable basis and Y is the response vector.
+        Predicted response Y_hat = X s_i = X (X'X)^(-1)X' Y,
+            where  X (X'X)^(-1)X' is the hat matrix;
+        The hat matrix:
+            maps the observed response vector to the fitted response vector,
+            has properties such as being symmetric and idempotent, and
+            its diagonal elements (leverage values) indicate the influence of each observation on its own fitted value;
+            high leverage points can have a significant impact on the regression model, and the hat matrix can be used to identify such points and assess the fit of the model;
+                in particular, leverage values close to 1 indicate that an observation has a large influence on its own fitted value, while leverage values close to 0 indicate that an observation has little influence on its own fitted value; observations with high leverage can potentially be influential points that may affect the overall fit of the model,
+                so it is important to examine leverage values when assessing the fit of a regression model.
     """
 
     resp_count = var_basis.shape[0]
@@ -556,7 +568,7 @@ def calc_hat_matrix(var_basis):
 
         hat_matrix = np.matmul(
             np.matmul(var_basis, transformed_matrix), var_basis_T
-        )
+        )   #IY : Hat_matrix = X(X'X)^(-1)X', where X is the psi basis (variable basis);
 
 #         hat_matrix = np.matmul(
 #             var_basis,

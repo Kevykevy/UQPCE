@@ -1,7 +1,7 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
-from sympy import symbols
+from sympy import symbols, this
 from sympy.utilities.lambdify import lambdify
 
 try:
@@ -97,13 +97,15 @@ class ProbabilityBoxes:
         for i in range(self.var_count):
             curr_var = self.var_list[i]
 
-            if curr_var.type is UncertaintyType.EPISTEMIC:
+            if curr_var.type is UncertaintyType.EPISTEMIC:  
+                #IY :  if the variable is epistemic, increment the count of epistemic variables and add its symbolic representation to the list of epistemic variable symbols;
                 self.epist_var_count += 1
                 self.epist_list_symb.append(self.var_list_symb[i])
             else:
+                #IY : else, add its symbolic representation to the list of aleatory variable symbols; this way, we can keep track of which variables are epistemic and which are aleatory for later use in resampling and evaluating the surrogate model
                 self.aleat_list_symb.append(self.var_list_symb[i])
     
-        self.aleat_var_count = len(self.var_list) - self.epist_var_count
+        self.aleat_var_count = len(self.var_list) - self.epist_var_count    #IY : No. of aleatory variables = the Total No. of variables - No. of epistemic variables
 
     def _generate_aleatory_samples(self):
         """
@@ -193,41 +195,59 @@ class ProbabilityBoxes:
                 np.ones([self.total_samps, mod_cnt], dtype=complex) * np.inf
             )
         else:
+            #IY : store the resampled variable basis values and the evaluated responses from the surrogate model for each combination of aleatory and epistemic samples;
+            # these matrices are initialized with infinite values to indicate that they have not been evaluated yet, and they will be filled in during the resampling process; the dimensions of these matrices are determined by the total number of samples (the product of the number of aleatory and epistemic samples) and the number of coefficients in the surrogate model (for var_basis_resamp) or the number of responses (for eval_resps)
             self.var_basis_resamp = (
                 np.ones([self.total_samps, coeff_cnt]) * np.inf
-            )
+            )   #IY : 
             self.eval_resps = (
                 np.ones([self.total_samps, mod_cnt]) * np.inf
-            )
+            ) 
 
         #--------------------------   create pbox curve(s)    --------------------------
         for ep in range(self.epist_samps):  # number of pbox curves to make
             beg_var_idx = ep * self.aleat_samps
             end_var_idx = (ep+1) * self.aleat_samps
 
-            new_eq = var_basis_vect_symb.subs(
-                {self.epist_list_symb[e]:self.epist_resample[ep,e] for e in 
-                range(self.epist_var_count)}
-            )
+            subs_dict = {}
+
+            #IY : build a dictionary mapping each epistemic symbol to its sampled value;
+            # this will allow us to evaluate the surrogate model for each combination of aleatory and epistemic samples by substituting the appropriate values into the symbolic expression for the variable basis vector
+            for e in range(self.epist_var_count):
+                subs_dict[self.epist_list_symb[e]] = self.epist_resample[ep, e]
+
+            new_eq = var_basis_vect_symb.subs(subs_dict)
+
+            # new_eq = var_basis_vect_symb.subs(
+            #     {self.epist_list_symb[e]:self.epist_resample[ep,e] for e in range(self.epist_var_count)}
+            # )   
+            
             var_basis_vect_func = lambdify(
                 (self.aleat_list_symb,), new_eq, modules='numpy'
-            )
+            )   #IY : create a lambda function that takes the aleatory variable symbols as input and evaluates the new symbolic expression for the variable basis vector with the epistemic variables substituted in;
+                
 
             self.var_basis_resamp[beg_var_idx:end_var_idx, :] = evaluate_points(
                 var_basis_vect_func, self.aleat_resample
-            )
+            )   #IY : evaluate the variable basis vector for each combination of aleatory samples using the lambda function we just created, and store the results in the appropriate rows of the var_basis_resamp matrix
+                # this will give us the values of the variable basis vector for each combination of aleatory and epistemic samples, which we can then use to evaluate the surrogate model and generate the pbox curves
 
             self.eval_resps[beg_var_idx:end_var_idx, :] = np.matmul(
                 self.var_basis_resamp[beg_var_idx:end_var_idx, :],
                 matrix_coeffs
             )
 
+
+        #IY : Calculate the CI bounds for the pbox curves by taking quantiles of the evaluated responses from the surrogate model;
+        # if convergence tracking is on, we calculate the CI for three different subsets of the evaluated responses (the last 2*cnt, cnt, and all responses) to track convergence and to see how the CI change as we include more samples; 
+        # if convergence tracking is off, we only calculate the CI interval for all responses
         if not self.track_conv_off:
             if self.epist_samps == 1:
                 cnt = self.aleat_sub_size
                 cils[0,:] = np.quantile(
                     self.eval_resps[:-2*cnt], low_bnd, axis=0
-                ).reshape(1,-1)
+                ).reshape(1,-1)  #IY : calculate the lower bound of the CI for the pbox curves by taking the quantile of the evaluated responses from the surrogate model at the specified low_bnd level;
+                                # we do this for three different subsets of the evaluated responses; we reshape the results to ensure they are in the correct format for later use in checking convergence and generating output messages
                 cils[1,:] = np.quantile(
                     self.eval_resps[:-cnt], low_bnd, axis=0
                 ).reshape(1,-1)
@@ -272,12 +292,18 @@ class ProbabilityBoxes:
                 (np.abs(np.diff(cils, axis=0)) < thresh).all(axis=0) 
                 * (np.abs(np.diff(cihs, axis=0)) < thresh).all(axis=0)
             )
+            #IY : The convergence is checked by comparing the low/high quantiles computed from three sample sizes
+                # then testing whether the changes are smaller than the specified threshold.
+                # That threshold is based on the model mean * conv_threshold_percent.
+            
             for i in range(mod_cnt):
                 if converged[i]:
                     out_msg[i] = 'The probability curves have converged.\n'
                 else:
                     out_msg[i] = 'The probability curves did not converge.\n'
-
+            #IY: converged = False means the estimated p-box bounds were still changing more than the allowed tolerance as the code increased the number of sampled responses. 
+            # It does not mean the code failed, but it does mean your plotted confidence interval is not yet numerically stable; less reliable.
+        
         return self.eval_resps, out_msg
 
 
@@ -299,7 +325,6 @@ class ProbabilityBoxes:
             conf_int_high = np.ones([self.epist_samps, model_cnt]) * -np.inf
         
         qs = [sig/2, 1-sig/2]
-
         for i in range(self.epist_samps):
 
             try:

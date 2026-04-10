@@ -134,7 +134,7 @@ class PCE():
         self.plot = False
         self.plot_stand = False
         self.outputs = True # Boolean for if output files should be saved
-        self.model_conf_int = False # Provide CIs on coeffs, Sobols, etc
+        self.model_conf_int = True # Provide CIs on coeffs, Sobols, etc
         self.stats = False
 
         # track and plot confidence interval unless turned off (True)
@@ -584,16 +584,20 @@ class PCE():
 
         if self._is_manager and self.verbose:
             print('Constructing surrogate model\n\nBuilding norm-squared matrix\n')
-        self._matrix.create_model_matrix()
-        self._matrix.form_norm_sq(order)
+        
+        self._matrix.create_model_matrix()  #IY : Obtain multi-index p
+        self._matrix.form_norm_sq(order)    #IY : Obtain squared norms (||phi||^2) for each basis term in the model matrix
+        
         if self._is_manager and self.verbose:
             print('Assembling psi matrix\n')
+        
         self._matrix.build()
         if self._is_manager and self.verbose:
             print('Psi matrix assembled\n')
             
         if self._is_manager and self.verbose:
             print('Evaluating psi matrix\n')
+        
         self._matrix.evaluate(self._X_stand)
 
         self.norm_sq = np.copy(self._matrix.norm_sq)
@@ -634,9 +638,9 @@ class PCE():
 
         self._mean = self._matrix.matrix_coeffs[0]
         self._sigma_sq = self._model.calc_var(self._matrix.norm_sq)
-        self._error, pred = self._model.calc_error(self._matrix.var_basis_sys_eval)
-        self._err_mean = calc_mean_err(self._error)
-        self._signal_to_noise = self._sigma_sq / self._err_mean
+        self._error, pred = self._model.calc_error(self._matrix.var_basis_sys_eval)     #IY : How much real variation the surrogate says exists in the output
+        self._err_mean = calc_mean_err(self._error)                                     #IY : Mean error of surrogate
+        self._signal_to_noise = self._sigma_sq / self._err_mean                         #IY : Shows the ratio of variation of the predicted response to typical fit error; the fit error has negligible impact on the model when this value is high; when this value is low, the surrogate is not capturing much of the variation in the output and the fit error is a significant portion of the model output variation
         self._mean_sq_error, hat_matrix, self._shapiro = self._model.check_normality(
             self._matrix.var_basis_sys_eval, self.significance, 
             self.graph_directory, sigfigs=self.sigfigs, plot=self.plot
@@ -676,12 +680,13 @@ class PCE():
             An m-by-n matrix with the first dimension having the number of 
             samples in the model (m) and the second having the number of 
             variables in the model (n).
+            # IY: m = no. of rows, n = no. of columns
         y :
             The 2D numpy array of responses from the user's analytic tool. 
         """
         self.set_samples(X)
 
-        self._y = np.copy(np.atleast_2d(y)).reshape(self._X.shape[0], -1)
+        self._y = np.copy(np.atleast_2d(y)).reshape(self._X.shape[0], -1)   #IY: the elements of y are in arrays to match with shape of X; reshape to ensure that the responses are in correct dimension
         self.model_cnt = self._y.shape[1]
 
         self._stats_str = [''] * self.model_cnt
@@ -696,7 +701,7 @@ class PCE():
             self.graph_directory = np.zeros(self.model_cnt, dtype=object)
             self._output_base_directory = check_directory(
                 self._output_base_directory, verbose=False
-            )
+            )   # IY: make sure the base output directory exists; if not, make it; this is done before the loop to ensure that if there are multiple responses, they are all put in the same base directory
             if self.model_cnt > 1:
                 for i in range(self.model_cnt):
                     self.output_directory[i] = os.path.join(self._output_base_directory, f'response_{i}')
@@ -707,17 +712,17 @@ class PCE():
                 self.graph_directory[0] = check_directory(
                     os.path.join(self._output_base_directory, self._graph_base_directory), 
                     verbose=self.verbose
-            )
+            )   # IY: if only one response, put graphs in the same directory as the outputs; if multiple responses, make subdirectories for each response and put graphs in those subdirectories
 
         X = np.atleast_2d(X)
         if X.shape[0] == 1: # only one uncertain variable
             X = X.T # transpose to ensure the responses are in correct dimension
-        
+
         # This can be expensive; ensure that this is only done once
         if not self._is_built:
             self._is_build = True
         
-        self._build_matrix(self.order)
+        self._build_matrix(self.order)  
         self._build_model()
 
         for i in range(self.model_cnt):
@@ -760,7 +765,14 @@ class PCE():
 
     def sobols(self) -> str:
         from uqpce.pce._helpers import create_total_sobols
+        """
+        IY:
+            This method calculates the Sobol indices for each variable in the model and creates a string to display the results.
+            It also calculates the rescaled Sobol indices by dividing each Sobol index by the sum of all Sobol indices for that response.
+            If the model_conf_int attribute is True, it also calculates the confidence intervals for the Sobol indices and stores them in the _sobol_bounds attribute.
 
+        """
+        
         self._sobols = self._model.get_sobols(self._matrix.norm_sq)
         tot_sobol = create_total_sobols(
             self._var_count, self._matrix.model_matrix, self._sobols
@@ -928,6 +940,8 @@ class PCE():
 
         return self.sample(count=count, seed=seed)
 
+    
+    
     def sample(self, count: int=-1, seed=None) -> np.ndarray:
         """
         This method returns a matrix of samples from the input variables.

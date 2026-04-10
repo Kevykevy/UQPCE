@@ -59,7 +59,7 @@ class Graphs:
             plt.title(f'{plot_name} vs {curr_var.name}{stand}')
             plt.xlabel(f'{curr_var.name}')
             plt.ylabel(f'{plot_name}')
-            image_path = f'{graph_dir}/{plot_name}_vs_{curr_var.name}'
+            image_path = f'{graph_dir}/{plot_name}_vs_{ curr_var.name}'
 
             plt.savefig(image_path.replace(':', '_'), dpi=600, bbox_inches='tight')
             plt.clf()

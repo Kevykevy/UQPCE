@@ -1,11 +1,12 @@
 from builtins import getattr
 import os
 import sys
+from turtle import done
 import warnings
 
 from numpy.linalg import inv, pinv, cond, solve
 from scipy.stats import pearsonr
-from sympy import symbols
+from sympy import symbols, this
 from sympy.utilities.lambdify import lambdify
 from sympy.parsing.sympy_parser import parse_expr
 import matplotlib.pyplot as plt
@@ -97,20 +98,24 @@ def create_total_sobols(var_count, matrix, sobols):
     Inputs: var_count- number of variables
             matrix- the interaction matrix
             sobols- the previously-calculated sobol indices for each interaction
+                #IY: to be precise, the input 'sobols' represents  normalized variance contribution per PCE basis term
 
-    Using the existing sobol indices, the total sobol index for each variable
-    is created. The string for the output is created.
+    Using the existing sobol indices, the total sobol index for each variable is created.
+    The string for the output is created.
     """
     if not (matrix.shape[0]-1 == sobols.shape[0]):
-        sobols = sobols.reshape(matrix.shape[0]-1, -1)
+        sobols = sobols.reshape(matrix.shape[0]-1, -1)  #IY: reshape the sobols array to ensure it has the correct shape for the calculations; this is necessary because the shape of the sobols array can vary depending on how it is calculated and stored in the model, and we need to ensure it has the correct dimensions for the subsequent calculations of total Sobol indices
 
     mat_size = len(matrix)
-    total_sobols = np.zeros([var_count, sobols.shape[1]])
+    total_sobols = np.zeros([var_count, sobols.shape[1]])   #IY : initialize  to store the total Sobol indices for each variable; the shape is determined by the number of variables and the number of responses (if there are multiple responses, there will be a Sobol index for each response)
 
     for i in range(1, mat_size):
         for j in range(var_count):
             if matrix[i, j] != 0:
-                total_sobols[j,:] += sobols[i - 1]
+                total_sobols[j,:] += sobols[i - 1] 
+                #IY : add the 'Sobol index' for the current interaction term to the total Sobol index for each variable that is part of that interaction;
+                # this is done by checking if the variable is present in the interaction term (i.e., if the corresponding entry in the matrix is non-zero) 
+                # and then adding the Sobol index for that term to the total for that variable; this way, we accumulate the contributions of all interaction terms that involve each variable to calculate the total Sobol index for that variable
 
     return total_sobols
 
@@ -276,6 +281,10 @@ def solve_coeffs(var_basis, responses):
     Uses the matrix system to solve for the matrix coefficients.
     """
     cond_num_thresh = 20
+    debug_lsq = True
+    # debug_lsq = os.environ.get('UQPCE_DEBUG_LSQ', '').lower() in (
+    #     '1', 'true', 'yes', 'on'
+    # )   #IY : Option to compare normal equation solution to np.linalg.lstsq for debugging
 
     var_basis = np.atleast_2d(var_basis)
     var_basis_T = np.transpose(var_basis)
@@ -294,7 +303,23 @@ def solve_coeffs(var_basis, responses):
         return np.zeros(var_basis.shape[1])
 
     matrix_coeffs = solve(basis_transform, np.dot(var_basis_T, responses))
+    #IY : To compare to least-squares solution for debugging ------
+    if debug_lsq:
+        pred = np.dot(var_basis, matrix_coeffs)
+        residual = responses - pred
+        normal_eq_error = np.linalg.norm(np.dot(var_basis_T, residual))
+        lstsq_coeffs = np.linalg.lstsq(var_basis, responses, rcond=None)[0]
+        coeff_diff = np.linalg.norm(matrix_coeffs - lstsq_coeffs)
+        residual_norm = np.linalg.norm(residual)
 
+        warn('Least-squares debug:')
+        warn(f'  var_basis shape: {var_basis.shape}')
+        warn(f'  responses shape: {np.shape(responses)}')
+        warn(f'  normal-equation residual ||A^T(y - Ac)||: {normal_eq_error:.6e}')
+        warn(f'  coefficient diff vs np.linalg.lstsq: {coeff_diff:.6e}')
+        warn(f'  residual norm ||y - Ac||: {residual_norm:.6e}')
+     #IY : End least-squares debug ---------------------------------------
+    
     return matrix_coeffs
 
 

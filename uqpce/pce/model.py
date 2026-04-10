@@ -1,5 +1,7 @@
 import copy
+from shutil import which
 
+from certifi import where
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
@@ -34,13 +36,12 @@ from uqpce.pce.stats.statistics import (
 
 class MatrixSystem:
     """
-    Inputs: responses- the array of responses from the results file 
-                       (or from the user_function)
-            var_list- the lsit of variables
+    Inputs: responses- the array of responses from the results file  (or from the user_function)
+            var_list- the list of variables
     
     The matrix system built from the responses and input values. The 
     MatrixSystem is built and solved to acquire the matrix coefficients in 
-    the systme of equations.
+    the system of equations.
     """
 
     __slots__ = (
@@ -60,7 +61,7 @@ class MatrixSystem:
         except TypeError:
             self.act_model_size = 0
 
-        self.var_list = var_list
+        self.var_list = var_list  
         self.var_count = len(var_list)
 
         self.inter_vals = (
@@ -73,8 +74,8 @@ class MatrixSystem:
 
     def create_model_matrix(self):
         """
-        Creates the model matrix to support an Nth order model. Supports 
-        creating a model matrix with variables of varying orders.
+        Creates the model matrix to support an Nth order model.
+        Supports creating a model matrix with variables of varying orders.
         """
         orders = np.array([var.order for var in self.var_list])
         max_order = np.max(orders)
@@ -85,6 +86,7 @@ class MatrixSystem:
 
         y_axis = 0
 
+        #IY : Obtain matrix that stores order of basis terms corresponding to the ith standard normal/uniform/... variable); multi-index p Eqn 5.61 in Hu et al.
         for i in range(max_order):  # interraction matrix formation
             prev_cols = prev_matrix.shape[0]
             curr_size = prev_cols * self.var_count + 1
@@ -102,11 +104,10 @@ class MatrixSystem:
             final = np.append(final, prev_matrix, axis=y_axis)
 
         indices = np.unique(final, axis=y_axis, return_index=True)[1]
-        self.model_matrix = final[np.sort(indices)]
+        self.model_matrix = final[np.sort(indices)]     #IY : multi-index p 
 
-        # Below, terms that contain an order higher than their individual order
-        # are removed; this is only relevant when any of the variables have
-        # different orders.
+        # Below, terms that contain an order higher than their individual order are removed;
+        # This is only relevant when any of the variables have different orders.
         for col in range(self.var_count):
             # Remove instances of orders higher than the respective variable
             # order
@@ -137,7 +138,17 @@ class MatrixSystem:
         """
         Inputs: order- the order of polynomial expansion 
         
-        Creates the model matrix and the corresponding norm squared matrix.
+        Creates the model matrix and the corresponding norm squared matrix of PCE basis terms.
+        
+        IY:
+        So if a row of self.model_matrix is [2, 1, 0], the corresponding basis term is something like :
+            psi_alpha(x) = phi_2(x1), phi_1(x2), phi_0(x3)
+        and its norm squared is
+            ||psi_alpha||^2 = ||phi_2||^2 ||phi_1||^2 ||phi_0||^2 
+        (Norm squared matrix here is effectively a column vector with one norm-squared value per basis term in the model matrix).
+
+        (The norm squared values are used to calculate the Sobol indices and variance of the model.)
+
         """
         if (
             not hasattr(self, 'model_matrix')
@@ -145,6 +156,10 @@ class MatrixSystem:
         ):
             self.create_model_matrix(order)
 
+        #IY : Obtain parameters for Message Passing Interface (MPI), which launches several processes at once to split the workload
+            # size = total number of MPI processes
+            # rank = which process this one is
+            # rank 0 is usually the manager/root process
         y_size = 1
 
         base = self.min_model_size // size
@@ -213,7 +228,7 @@ class MatrixSystem:
             var_basis_mat_symb = comm.allgather(var_basis_mat_symb_temp)
             var_basis_mat_symb = np.concatenate(var_basis_mat_symb, axis=1)
         else:
-            var_basis_mat_symb =var_basis_mat_symb_temp        
+            var_basis_mat_symb = var_basis_mat_symb_temp        
 
         for i in range(beg, end):
             curr_vect = 1
@@ -239,8 +254,8 @@ class MatrixSystem:
 
     def evaluate(self, X):
         """
-        Inputs: attribute- the attribute of variables used to calculate the 
-                responses; this is almost always std_vals
+        Inputs: attribute- the attribute of variables used to calculate the responses; 
+                this is almost always std_vals
         
         Fills the symbolic 'psi' variable basis system with the numbers that 
         correspond to the variables in the matrix.
@@ -403,14 +418,13 @@ class SurrogateModel:
         Solves for the sobol sensitivities.
         """
         tol = 1e-8
-        cnt = len(norm_sq) - 1
+        cnt = len(norm_sq) - 1  #IY: the first row of the model matrix corresponds to the mean (constant), so it is not included in the Sobol calculations; hence, the number of Sobol indices is one less than the number of rows in the model matrix
         self.sobols = np.ones([cnt, self.model_cnt])
 
         for i in range(1, cnt+1):
             self.sobols[i - 1, :] = (
                 (self.matrix_coeffs[i] ** 2 * norm_sq[i]) / self.sigma_sq
-            )
-
+            ) 
 
         return self.sobols
 
@@ -427,9 +441,10 @@ class SurrogateModel:
             np.reshape(
                 self.matrix_coeffs, (len(self.matrix_coeffs), self.model_cnt)
             )[1:] ** 2
-        )
+        )   #IY : Square the matrix coefficients, excluding the first row which corresponds to the mean
 
         norm_mult_coeff = norm_sq[1:] * matrix_coeffs_sq
+
         if norm_mult_coeff.shape[0] != 1 and norm_mult_coeff.shape[1] != self.model_cnt:
             warn(
                 'Sigma squared does not look correct for calculating the Sobol '
@@ -442,33 +457,51 @@ class SurrogateModel:
 
     def calc_error(self, var_basis):
         """
-        Inputs: var_basis- the varibale basis matrix that consists of values 
+        Inputs: var_basis- the variable basis matrix that consists of values 
                 (not symbols)
         
         Solves for the calculated responses that the matrix coefficients and 
         variable basis ('alpha' and 'psi') result in as well as the difference 
         between these values and the actual values.
         """
-        prod = np.dot(var_basis, self.matrix_coeffs)
+        pred = np.dot(var_basis, self.matrix_coeffs)
 
-        self.error = prod - self.responses
+        self.error = pred - self.responses
 
-        return self.error, prod
+        return self.error, pred
 
     def check_normality(
             self, var_basis_sys_eval, sig, graph_dir=None, sigfigs=5, plot=False
         ):
         """
-        Inputs: var_basis_sys_eval- the variable basis system (not symbolic) 
-                matrix
+        Inputs: var_basis_sys_eval- the variable basis system (not symbolic) matrix
                 sig- the level of signif for the Shapiro-Wilks test
                 graph_dir- the directory that the graphs are put into
         
         Ensures that the err follows a normal distribution.
+
+        IY:
+        The Shapiro-Wilks test is a statistical test used to determine if a sample comes from a normally distributed population.
+            The value lies between 0 to 1, where a value close to 1 indicates that the output is likely from a normal distribution, and a value close to 0 indicates that the sample is unlikely to be from a normal distribution;
+            The null hypothesis is that the data is from a normal distribution, so if the p-value is less than the significance level (sig), we reject the null hypothesis and conclude that there is evidence that the errors are not from a normal distribution.
+            if the p-value is greater than the significance level, we fail to reject the null hypothesis and conclude that there is insufficient evidence to infer that the errors are not from a normal distribution
+
+        Hat matrix = X ((X^T X)^{-1} X^T) is derived as such:
+            Since s_i = ((X^T X)^{-1} X^T) Y, where X is the variable basis system and y is the response vector,
+            Y_hat = (s_i * y) = [X ((X^T X)^{-1} X^T)] y = [H] * y, where H is the hat matrix;
+            
+            The hat matrix is used to calculate the standard error of the predictions, which accounts for the leverage of each data point in the model;
+            The diagonal elements of the hat matrix (h_ii) represent the leverage of each data point, which indicates how much influence a data point has on the fitted model;
+                Data points with high leverage can have smaller standard errors, and this is accounted for when calculating confidence intervals for predictions using the hat matrix
         """
+
         test_stat = np.zeros(self.model_cnt)
         p_val_hypoth = np.zeros(self.model_cnt)
-        shapiro_results = np.zeros(self.model_cnt, dtype=object)
+        shapiro_results = np.zeros(self.model_cnt, dtype=object)    #IY : a frequentist statistical test used to determine if a sample comes from a normally distributed population; the value lies between 0 to 1, where a value close to 1 indicates that the sample is likely from a normal distribution, and a value close to 0 indicates that the sample is unlikely to be from a normal distribution; the null hypothesis is that the data is from a normal distribution, so if the p-value is less than the significance level (sig), we reject the null hypothesis and conclude that there is evidence that the errors are not from a normal distribution; if the p-value is greater than the significance level, we fail to reject the null hypothesis and conclude that there is insufficient evidence to infer that the errors are not from a normal distribution
+        
+        #IY : the following for loop asks “Do these errors look like they came from a normal distribution?”
+        # Why ask that? Because later code builds uncertainty bands using formulas that assume the remaining unexplained error behaves like Gaussian noise
+            # E.g.: when estimate the error variance from the residual, multiply by a t-distribution cutoff and turn that into an uncertainty width
         for i in range(self.model_cnt):
             test_stat[i], p_val_hypoth[i] = stats.shapiro(self.error[:,i])
 
@@ -492,8 +525,10 @@ class SurrogateModel:
             self.responses, self.matrix_coeffs, var_basis_sys_eval
         )
 
-        sigma = np.atleast_2d(np.array(np.sqrt(mean_sq_error)))
-        hat_adj = np.atleast_2d(np.diag(sigma))*np.atleast_2d(np.sqrt(1 - np.diagonal(hat_matrix))).T
+        sigma = np.atleast_2d(np.array(np.sqrt(mean_sq_error)))     #IY : RMSE , the standard deviation of the errors (and converts to original unit of my data), which is used to calculate the confidence intervals for the model predictions; it is calculated as the square root of the mean squared error, which is the average of the squared differences between the predicted values and the actual values; a smaller sigma indicates that the model's predictions are closer to the actual values, while a larger sigma indicates that the model's predictions are more spread out from the actual values; in this code, sigma is calculated as a 2D array to ensure that it can be properly broadcasted when calculating the standard error matrix
+        hat_adj = np.atleast_2d(np.diag(sigma)) * np.atleast_2d(np.sqrt(1 - np.diagonal(hat_matrix))).T  
+            #IY: hat_adj is the adjustment/scaling factor for the standard error of the predictions, so that the error is normalised to have the same spread and hence become comparable across sample points.
+                # this adjustment is necessary because data points with high leverage (h_ii) (i.e., those that have a large influence on the fitted model) can have smaller standard errors, and this adjustment helps to account for that when calculating confidence intervals for predictions
         std_err_matrix = self.error / hat_adj
 
         if plot and graph_dir is not None:
